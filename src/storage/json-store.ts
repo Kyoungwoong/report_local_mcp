@@ -60,7 +60,7 @@ export async function writeJsonAtomic(
   }
 }
 
-async function withFileLock<T>(lockPath: string, task: () => Promise<T>): Promise<T> {
+export async function withFileLock<T>(lockPath: string, task: () => Promise<T>): Promise<T> {
   await mkdir(dirname(lockPath), { recursive: true, mode: 0o700 });
   const deadline = Date.now() + 2_000;
   while (true) {

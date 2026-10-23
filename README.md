@@ -1,23 +1,25 @@
 # Local DevLog MCP
 
-**Status: Milestone 1 complete / not a complete MVP.** A macOS-first, open-source MCP that records Git push attempts across repositories for later, human-reviewed daily logs.
+**Status: Milestone 2 complete / external publishing is not implemented.** A macOS-first, open-source MCP that records Git push attempts and stores versioned, human-approved daily drafts.
 
 ## What works
 - Multiple local Git repositories can be registered with `pnpm run setup`.
 - A fail-open `pre-push` hook records push attempts without requiring the MCP server to be running.
 - JSON event storage uses deterministic event IDs, a writer lock, and atomic replacement.
 - `get_daily_activity` returns dated commit metadata and current remote-state verification.
-- The `stdio` MCP server provides `ping` and read-only activity lookup.
+- Daily drafts can be saved, listed, edited, rejected, reopened, and explicitly approved through MCP Tools.
+- Draft revisions and approval evidence are stored atomically in local JSON.
+- MCP Apps-capable hosts receive an interactive draft review UI; other hosts receive the same structured JSON plus text fallback.
+- Approval uses native form Elicitation when the host supports it, with an exact confirmation phrase fallback otherwise.
 
 ## Planned MVP (not yet implemented)
-Daily draft review and approval; Notion Tasks/Work Logs; Apple Calendar EventKit bridge; idempotent publication.
+Notion Tasks/Work Logs; Apple Calendar EventKit bridge; idempotent publication. Only approved drafts will be eligible for those future integrations.
 
 ## Requirements
 macOS, Node.js >=20, pnpm, Git. Calendar bridge will additionally require Xcode Command Line Tools and calendar permission.
 
 ## Start
 ```bash
-cp .env.example .env   # fill secrets later; do not commit
 pnpm install
 pnpm typecheck
 pnpm test
@@ -51,9 +53,31 @@ cwd = "/absolute/path/to/local-devlog-mcp"
 
 The configured path points to build output, so run `pnpm build` again after changing the server source.
 
+Native MCP form Elicitation is preferred for draft approval. With a Codex version that exposes the granular setting, ensure Elicitation is not disabled in `~/.codex/config.toml`:
+
+```toml
+approval_policy.granular.mcp_elicitations = true
+```
+
+See the official [Codex App Server documentation](https://learn.chatgpt.com/docs/app-server) and [configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference). Host support varies: when an MCP client does not render MCP Apps, the draft Tools still work through structured JSON; when it does not support form Elicitation, approval requires the exact phrase returned by the failed approval attempt.
+
+## Daily draft workflow
+
+1. Call `get_daily_activity` with a local date and use only its Git evidence to prepare `summary`, `workItems`, and `nextActions`.
+2. Pass the returned `sourceFingerprint` and referenced event IDs to `save_daily_draft`. Saving never approves a draft.
+3. Review with `get_daily_draft` or `list_daily_drafts`. Use `update_daily_draft` with the current `expectedVersion`; stale edits return `VERSION_CONFLICT`.
+4. Reject or reopen through `update_daily_draft` using `REJECTED` or `PENDING`.
+5. Call `approve_daily_draft` for one exact `draftId` and `version`. Native Elicitation requires a human to accept and type the displayed phrase.
+
+The available draft Tools are `save_daily_draft`, `get_daily_draft`, `list_daily_drafts`, `update_daily_draft`, and `approve_daily_draft`. Approved drafts are immutable. If new Git activity appears between saving and approval, approval remains possible but records `SOURCE_CHANGED_AFTER_DRAFT`.
+
+The interactive view is served as a self-contained `ui://` resource following the [MCP Apps specification](https://github.com/modelcontextprotocol/ext-apps/blob/main/specification/2026-01-26/apps.mdx). It has no external network or asset permissions. Approval always goes back through the server Tool; clicking an in-app button alone is not approval.
+
+Fallback confirmation is weaker than native Elicitation because an AI client can reproduce a displayed phrase. The persisted `approvalMethod` distinguishes `MCP_ELICITATION` from `EXPLICIT_CONFIRMATION_FALLBACK`; review that audit field before future publication.
+
 ## Repository setup
 
-Configuration and events are stored outside this checkout at `~/Library/Application Support/local-devlog-mcp/`. No token or diff content is stored there.
+Configuration, events, and drafts are stored outside this checkout at `~/Library/Application Support/local-devlog-mcp/`. No token or diff content is stored there.
 
 ```bash
 # Build first because installed hooks call dist/git/hook-runner.js.

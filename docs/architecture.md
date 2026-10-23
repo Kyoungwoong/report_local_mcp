@@ -13,4 +13,11 @@
 - Future Slack/KakaoTalk are separate delivery concerns, not part of MVP.
 
 ## Draft state
-DRAFT -> APPROVED -> (Notion SYNCED/FAILED, Calendar SYNCED/FAILED). A draft edit invalidates prior approval. Approval must be explicit from the human, not inferred from model text.
+PENDING <-> REJECTED -> APPROVED -> (future: Notion SYNCED/FAILED, Calendar SYNCED/FAILED).
+
+- One logical draft exists per work date and timezone. Edits append immutable, monotonically numbered revisions using optimistic version checks.
+- The MCP client LLM writes proposed text, while the server validates that every work item links to captured Git events and records whether those sources have a current remote match.
+- Approval does not create a new content version. It freezes the exact version with its timestamp, method, and source-change warnings; approved content cannot be edited.
+- Native MCP form Elicitation is the preferred human boundary. Clients without it must provide a draft/version-specific phrase, whose weaker trust guarantee is retained in `approvalMethod`.
+- The MCP App is a self-contained optional view over the same Tools. It has no direct storage or network access, and clients without Apps support retain full JSON/text behavior.
+- Approval must be explicit from the human, not inferred from model text. No external publication is permitted merely because a Tool was invoked.

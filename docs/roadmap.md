@@ -14,3 +14,10 @@ Clone, configure, register 2 repositories, collect push attempts without a daemo
 
 ## Cut line
 If calendar permissions delay delivery, release Notion-first beta and label Calendar incomplete. Do not misrepresent readiness.
+
+## Current implementation
+
+- Milestone 0: TypeScript build and stdio MCP connectivity complete.
+- Milestone 1: repository registration, fail-open pre-push collection, remote verification, and daily activity complete.
+- Milestone 2: versioned daily drafts, MCP Apps review UI, Elicitation-first approval, and fallback audit trail complete.
+- Notion, Calendar, and publication recovery remain unimplemented.

@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Local DevLog Daily Draft</title>
+    <style>
+      :root { color-scheme: light dark; font-family: var(--font-sans, system-ui, sans-serif); }
+      body { margin: 0; padding: 16px; color: var(--color-text-primary, CanvasText); background: var(--color-background-primary, Canvas); }
+      main { display: grid; gap: 14px; max-width: 900px; margin: auto; }
+      header, section { border: 1px solid var(--color-border-secondary, #8886); border-radius: 12px; padding: 14px; }
+      h1, h2 { margin: 0 0 10px; }
+      h1 { font-size: 1.25rem; } h2 { font-size: 1rem; }
+      .meta, .hint { color: var(--color-text-secondary, #666); font-size: .875rem; }
+      .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 8px; }
+      label { display: grid; gap: 5px; font-size: .875rem; }
+      textarea, input { width: 100%; box-sizing: border-box; border: 1px solid var(--color-border-primary, #888); border-radius: 7px; padding: 8px; background: var(--color-background-secondary, Canvas); color: inherit; }
+      textarea { min-height: 90px; resize: vertical; font-family: inherit; }
+      #work-items { min-height: 180px; font-family: var(--font-mono, monospace); font-size: .8rem; }
+      .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+      button { border: 1px solid var(--color-border-primary, #777); border-radius: 7px; padding: 7px 11px; background: var(--color-background-secondary, #eee); color: inherit; cursor: pointer; }
+      button.primary { background: var(--color-background-info, #1769aa); color: var(--color-text-inverse, white); }
+      button.danger { background: var(--color-background-danger, #a92828); color: var(--color-text-inverse, white); }
+      button:disabled { opacity: .5; cursor: default; }
+      .draft-row { display: flex; justify-content: space-between; align-items: center; width: 100%; margin: 5px 0; text-align: left; }
+      .warning { color: var(--color-text-warning, #a05a00); }
+      .error { color: var(--color-text-danger, #b00020); white-space: pre-wrap; }
+      .success { color: var(--color-text-success, #087b33); }
+      [hidden] { display: none !important; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>Local DevLog</h1>
+        <div id="status" class="hint">Connecting to the MCP host…</div>
+      </header>
+      <section id="list-panel" hidden>
+        <h2>Daily drafts</h2>
+        <div id="draft-list"></div>
+      </section>
+      <section id="editor-panel" hidden>
+        <h2>Draft review</h2>
+        <div id="draft-meta" class="meta"></div>
+        <div id="warnings" class="warning"></div>
+        <div class="grid">
+          <label>Summary<textarea id="summary"></textarea></label>
+          <label>Next actions (one per line)<textarea id="next-actions"></textarea></label>
+        </div>
+        <label>Work items (JSON array)<textarea id="work-items" spellcheck="false"></textarea></label>
+        <p class="hint">Each work item remains linked to Git source event IDs. Verification labels are recalculated by the server.</p>
+        <div class="actions">
+          <button id="save" class="primary">Save new version</button>
+          <button id="reject" class="danger">Reject</button>
+          <button id="reopen">Reopen as pending</button>
+          <button id="refresh">Refresh</button>
+        </div>
+        <hr />
+        <label>Fallback confirmation phrase
+          <input id="confirmation" autocomplete="off" placeholder="Required only when host elicitation is unavailable" />
+        </label>
+        <div class="actions"><button id="approve" class="primary">Approve exact version</button></div>
+        <h2>Revision history</h2>
+        <div id="history" class="meta"></div>
+      </section>
+    </main>
+    <script type="module" src="/main.ts"></script>
+  </body>
+</html>
+
