@@ -6,7 +6,9 @@
 - No embedded LLM API. Codex/Claude or another compatible client provides the AI.
 - Pre-push cannot confirm success; verify remote refs later and mark uncertain events.
 - One TypeScript package; small Swift EventKit helper for macOS Calendar.
-- Store state under user data directory (to be implemented), never inside tracked repositories.
+- Store versioned JSON state under `~/Library/Application Support/local-devlog-mcp`, never inside tracked repositories.
+- Per-repository hooks are fail-open. Existing or externally shared hooks paths are refused rather than overwritten or guessed at.
+- Event writes use deterministic IDs, a writer lock, and atomic file replacement.
 - External writes require persisted approval and per-target idempotency records.
 - Future Slack/KakaoTalk are separate delivery concerns, not part of MVP.
 

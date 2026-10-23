@@ -1,14 +1,16 @@
 # Local DevLog MCP
 
-**Status: starter scaffold / not a complete MVP.** A macOS-first, open-source MCP that will turn Git activity across repositories into human-approved daily logs in Notion and Apple Calendar.
+**Status: Milestone 1 complete / not a complete MVP.** A macOS-first, open-source MCP that records Git push attempts across repositories for later, human-reviewed daily logs.
 
-## What works in this starter
-- A minimal `stdio` MCP server with `ping` and `get_daily_activity` (the latter currently returns a clearly labeled placeholder).
-- TypeScript strict compilation, a basic test, example config and Codex guidance.
-- A non-destructive setup command that writes a local config template.
+## What works
+- Multiple local Git repositories can be registered with `pnpm run setup`.
+- A fail-open `pre-push` hook records push attempts without requiring the MCP server to be running.
+- JSON event storage uses deterministic event IDs, a writer lock, and atomic replacement.
+- `get_daily_activity` returns dated commit metadata and current remote-state verification.
+- The `stdio` MCP server provides `ping` and read-only activity lookup.
 
 ## Planned MVP (not yet implemented)
-Git `pre-push` attempt collection; remote verification; daily draft review and approval; Notion Tasks/Work Logs; Apple Calendar EventKit bridge; idempotent publication.
+Daily draft review and approval; Notion Tasks/Work Logs; Apple Calendar EventKit bridge; idempotent publication.
 
 ## Requirements
 macOS, Node.js >=20, pnpm, Git. Calendar bridge will additionally require Xcode Command Line Tools and calendar permission.
@@ -20,7 +22,7 @@ pnpm install
 pnpm typecheck
 pnpm test
 pnpm build
-pnpm setup
+pnpm run setup -- add /absolute/path/to/repository
 pnpm start
 ```
 
@@ -49,11 +51,43 @@ cwd = "/absolute/path/to/local-devlog-mcp"
 
 The configured path points to build output, so run `pnpm build` again after changing the server source.
 
-## Configuration
-`config.example.json` is a sample; `pnpm setup` creates `config.local.json` if missing. The setup does not install hooks or access external services yet. Do not place tokens in JSON. Set `NOTION_TOKEN`, `NOTION_TASKS_DATABASE_ID`, `NOTION_WORKLOGS_DATABASE_ID` via environment/secure configuration once integration is implemented.
+## Repository setup
+
+Configuration and events are stored outside this checkout at `~/Library/Application Support/local-devlog-mcp/`. No token or diff content is stored there.
+
+```bash
+# Build first because installed hooks call dist/git/hook-runner.js.
+pnpm build
+
+# Add one or more repositories and install their hooks.
+pnpm run setup -- add ~/Projects/one ~/Projects/two
+
+# Show registered repositories and the active data directory.
+pnpm run setup -- list
+
+# Change the calendar timezone used by get_daily_activity.
+pnpm run setup -- timezone America/Los_Angeles
+
+# Remove only the matching Local DevLog hook and registration.
+pnpm run setup -- remove ~/Projects/one
+```
+
+Use `pnpm run setup`, including `run`: pnpm 10 reserves `pnpm setup` for configuring pnpm itself and does not dispatch the project script.
+
+For isolated testing, `LOCAL_DEVLOG_DATA_DIR` overrides the data directory. `config.example.json` documents the persisted configuration version but repository entries should be created through `pnpm run setup`.
 
 ## Security and Git behavior
-`pre-push` executes before a push succeeds. Captured hook events are attempts, not proof of remote publication. Never let hook collection failures block the user's push. Never overwrite an existing hook silently. User approval is required before external writes.
+`pre-push` executes before a push succeeds. Captured events are attempts, not proof of remote publication. `REMOTE_MATCH` means only that the requested commit or deletion agrees with the currently observed remote state; it does not prove which command produced that state.
+
+Hook collection failures print a diagnostic to stderr and allow the push to continue. Setup refuses to overwrite an existing `pre-push` hook because automatically combining arbitrary hook scripts can change stdin and exit-code behavior. Removal checks the exact installed hook hash and never deletes a modified or third-party hook. Repository-local `core.hooksPath` settings are respected; external paths are refused because a shared hook cannot safely embed one repository identity.
+
+## Manual macOS check
+
+1. Run `pnpm build`, then register a temporary repository with `pnpm run setup -- add <path>`.
+2. Push to a local bare repository while the MCP server is stopped.
+3. Confirm `events.json` appears under `~/Library/Application Support/local-devlog-mcp/`.
+4. Start Codex, call `get_daily_activity` for the local date, and confirm the event is labeled as a push attempt.
+5. Run `pnpm run setup -- remove <path>` and confirm unrelated hook files are untouched.
 
 ## Roadmap
 See `docs/roadmap.md`. Slack and KakaoTalk are future ideas only (`docs/future-extensions.md`).

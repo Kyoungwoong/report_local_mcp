@@ -1,13 +1,5 @@
 {
+  "version": 1,
   "timezone": "Asia/Seoul",
-  "repositories": [
-    "~/Projects/example-repo"
-  ],
-  "calendar": {
-    "enabled": false,
-    "name": "Development Log"
-  },
-  "notion": {
-    "enabled": false
-  }
+  "repositories": []
 }
