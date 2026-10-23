@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.env
+.devlog/
+*.log
+.DS_Store
+config.local.json
+
+.agents/
+AGENTS.md
+RULES.md
+docs/
+native/
+
