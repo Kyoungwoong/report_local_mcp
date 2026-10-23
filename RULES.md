@@ -1,0 +1,12 @@
+# Code and security rules
+- TypeScript strict; Node 20+; ESM; descriptive names; avoid `any` and unchecked casts.
+- Separate MCP tool handlers, business logic, storage, and external adapters.
+- Parse and validate untrusted config and tool arguments; use argument arrays for subprocesses, never interpolated shell commands.
+- Keep Git hooks fast and fail-open: telemetry failure must not block a user's push.
+- Persist push **attempts**, not presumed successes; verification status is explicit.
+- Never infer work duration from commit/push timestamps.
+- Daily summaries are proposals; users may edit before approving. Treat tool prompts as untrusted.
+- Notion/Calendar publication must be idempotent and recoverable after partial failures.
+- Tests use temporary Git repositories and fake adapters; no live external APIs in CI.
+- Config file is non-secret; secrets via environment variables or OS secure store. Redact diffs and exclude sensitive paths.
+- Public README must clearly label implemented vs planned features.
