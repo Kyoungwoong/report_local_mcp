@@ -27,7 +27,9 @@ PENDING <-> REJECTED -> APPROVED -> (future: Notion SYNCED/FAILED, Calendar SYNC
 - Database containers and Data Sources are resolved separately using the pinned `2026-03-11` Notion API. Schema validation is read-only and never repairs user databases.
 - Preview binds the approved draft version, selected Next Actions, generated Work Logs, and a fingerprint. Publishing rejects a changed or unreviewed preview.
 - Publication requires a second explicit Elicitation confirmation because draft approval alone does not authorize an external write.
-- Every Work Log and Task has a deterministic Local ID. Before creation, the adapter queries that ID so a crash between the remote write and local persistence remains recoverable without duplication.
+- One Work Log is created per `workDate + timezone`. Its deterministic daily Local ID is independent of Draft ID; Tasks retain per-Draft/action IDs.
+- All Work Items are grouped by Repository in the single Work Log body. A different Draft claiming an already-published daily identity returns a conflict instead of creating or updating a page.
+- Before creation, the adapter queries the daily Local ID and Date property so a crash between the remote write and local persistence remains recoverable without duplication.
 - `notion-publications.json` tracks each target item independently as PENDING, SYNCED, or FAILED. Retry skips synced items and retries failed or locally uncertain items.
 - Detailed Work Item text is page body content; database properties retain compact searchable metadata. Tokens, diffs, and local repository paths are never published.
 
@@ -37,5 +39,6 @@ PENDING <-> REJECTED -> APPROVED -> (future: Notion SYNCED/FAILED, Calendar SYNC
 - macOS 14 full Calendar access is required because target selection and idempotent lookup need reads. Permission is requested only by an explicit setup or Tool input.
 - Configuration stores one EventKit calendar identifier plus cached display metadata. If the identifier disappears after a full sync, the user must select it again; title matching is never guessed.
 - Preview freezes the approved Draft version, all-day date/timezone, target Calendar, body, available Notion Work Log links, and fingerprint. Publishing requires a second explicit Elicitation confirmation.
-- `calendar-publications.json` is independent from Notion state. A deterministic marker in event notes permits recovery when EventKit succeeds before local persistence.
+- `calendar-publications.json` is independent from Notion state. A deterministic `workDate + timezone` marker in event notes permits recovery when EventKit succeeds before local persistence and blocks a different Draft from creating a second daily event.
 - Deleted or moved events are surfaced as `MISSING` or `MOVED`. A later explicitly confirmed publication creates a replacement in the configured Calendar and never edits or deletes the moved event.
+- New Git activity after approval is surfaced as a warning. Published content is immutable in the MVP; amendment is a future explicit workflow.

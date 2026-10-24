@@ -1,6 +1,6 @@
 # Local DevLog MCP
 
-**Status: Milestone 4 implemented / live Calendar write requires opt-in verification.** A macOS-first, open-source MCP that records Git push attempts, stores versioned human-approved drafts, and explicitly publishes approved work to Notion and Apple Calendar.
+**Status: Milestone 4.1 implemented.** A macOS-first, open-source MCP that records Git push attempts, stores one versioned human-approved draft per local work date, and explicitly publishes one daily Work Log and one all-day Calendar event.
 
 ## What works
 - Multiple local Git repositories can be registered with `pnpm run setup`.
@@ -12,8 +12,8 @@
 - MCP Apps-capable hosts receive an interactive draft review UI; other hosts receive the same structured JSON plus text fallback.
 - Approval uses native form Elicitation when the host supports it, with an exact confirmation phrase fallback otherwise.
 - Notion Database/Data Source configuration can be validated read-only against API version `2026-03-11`.
-- Approved Work Items can be published to Work Logs and explicitly selected Next Actions to Tasks.
-- Notion publication uses deterministic Local IDs and per-item local state for duplicate prevention and partial-failure retry.
+- All approved Work Items for one `workDate + timezone` are combined into one Notion Work Log; explicitly selected Next Actions become Tasks.
+- Notion publication uses a deterministic daily Local ID and per-item local state for duplicate prevention and partial-failure retry.
 - Approved drafts can be previewed and explicitly published as all-day Apple Calendar events through a Swift EventKit bridge.
 - Notion and Calendar publication states are independent; a failure in one target does not erase the other target's success.
 - Calendar publication uses a deterministic marker plus the EventKit identifier for duplicate prevention and crash recovery.
@@ -121,7 +121,9 @@ Publication is deliberately two-phase:
 3. Call `publish_to_notion` with the same selection and fingerprint. Native Elicitation or the exact returned fallback phrase is required before any write.
 4. Call `get_notion_publication_status` to inspect each item and retry failures safely.
 
-Approval alone never publishes. Every Work Item becomes one Work Log, while only explicitly selected Next Actions become Tasks. Work Log details are written in the page body. The local status is stored in `notion-publications.json`; if a remote create succeeds before local persistence, retry queries the Local ID before creating anything else.
+Approval alone never publishes. One approved Daily Draft becomes one Work Log containing Repository-grouped Work Items, while only explicitly selected Next Actions become Tasks. With multiple repositories, their URLs are written in the page body instead of forcing several values into the single Repository URL property. The local status is stored in `notion-publications.json`; if a remote create succeeds before local persistence, retry queries the daily Local ID before creating anything else.
+
+The publication identity is `workDate + timezone`, not `draftId`. A different Draft cannot create another Work Log for an already-published daily identity and receives `DAILY_PUBLICATION_CONFLICT`. Re-publishing the same Draft skips the existing Work Log while still allowing newly selected Tasks. Legacy single-page publications are adopted locally without changing the Notion page; ambiguous legacy days with multiple pages are reported as conflicts.
 
 ## Apple Calendar setup and publication
 
@@ -148,6 +150,10 @@ Calendar publication is also two-phase:
 The event date uses the Draft's configured IANA timezone; Git timestamps are never interpreted as work start or end times. The body contains the summary, repository work, next actions, Draft/version marker, and any already-synced Notion Work Log links.
 
 State is stored in `calendar-publications.json`, separately from Notion. If EventKit succeeds before local state can be saved, retry finds the event by its stable Local DevLog marker. If the user deletes or moves the event, the status reports `MISSING` or `MOVED`; a newly confirmed publication creates a replacement in the configured Calendar without modifying the moved event.
+
+Calendar uses the same `workDate + timezone` daily identity as Notion. A different Draft cannot create a second event for that identity. Existing legacy events remain unchanged and are recognized through their stored EventKit identifier and marker.
+
+If new Git activity appears after approval, publication previews and status responses report `sourceChangedAfterApproval`. MVP publication never edits an already-published Work Log or Calendar event; changing published content requires a future explicit amendment workflow.
 
 The read-only live check is opt-in:
 

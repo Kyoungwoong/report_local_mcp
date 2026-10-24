@@ -149,6 +149,72 @@ describe('Calendar publication service', () => {
     expect([...calendar.events.values()][0]?.input).toMatchObject({ workDate: '2026-10-24', timezone: 'Asia/Seoul' });
   });
 
+  it('keeps one legacy event, rejects another draft for the same daily key, and preserves the external event', async () => {
+    const value = await fixture();
+    const store = new JsonCalendarPublicationStore(value.dataDirectory);
+    const legacyLocalId = `${value.draftId}:v1:calendar`;
+    await store.initialize({
+      draftId: value.draftId, draftVersion: 1, localId: legacyLocalId,
+      previewFingerprint: 'a'.repeat(64), calendarIdentifier: 'calendar-1', workDate: '2026-10-24',
+      timezone: 'Asia/Seoul', dailyKey: 'legacy', timestamp: '2026-10-24T02:00:00.000Z',
+    });
+    await store.mark({
+      draftId: value.draftId, draftVersion: 1, status: 'SYNCED', eventIdentifier: 'legacy-event',
+      timestamp: '2026-10-24T02:01:00.000Z',
+    });
+    const calendar = new FakeCalendar();
+    calendar.events.set(legacyLocalId, {
+      identifier: 'legacy-event', calendarIdentifier: 'calendar-1',
+      input: {
+        calendarIdentifier: 'calendar-1', localId: legacyLocalId, workDate: '2026-10-24', timezone: 'Asia/Seoul',
+        title: '개발 일지 | 2026-10-24', notes: `시간대: Asia/Seoul\nLocal DevLog Calendar ID: ${legacyLocalId}`,
+      },
+    });
+    const service = new CalendarPublicationService(value.dataDirectory, calendar);
+    const input = { draftId: value.draftId, version: 1 };
+    const preview = await service.preview(input);
+    expect(preview).toMatchObject({ localId: legacyLocalId, eventDisposition: 'SKIP_EXISTING' });
+    await expect(service.publish({
+      ...input, previewFingerprint: preview.previewFingerprint, publicationAuthorized: true,
+    })).resolves.toMatchObject({ status: 'SYNCED', action: 'SKIPPED' });
+    expect(calendar.createCalls).toBe(0);
+
+    await store.initialize({
+      draftId: '22222222-2222-4222-8222-222222222222', draftVersion: 1,
+      localId: 'other-calendar', previewFingerprint: 'b'.repeat(64), calendarIdentifier: 'calendar-1',
+      workDate: '2026-10-24', timezone: 'Asia/Seoul', dailyKey: 'other', timestamp: '2026-10-24T03:00:00.000Z',
+    });
+    await store.mark({
+      draftId: '22222222-2222-4222-8222-222222222222', draftVersion: 1,
+      status: 'SYNCED', eventIdentifier: 'other-event', timestamp: '2026-10-24T03:01:00.000Z',
+    });
+    await expect(service.preview(input)).rejects.toMatchObject({ code: 'DAILY_PUBLICATION_CONFLICT' });
+    await expect(service.getStatus(value.draftId, 1)).resolves.toMatchObject({ status: 'CONFLICT' });
+    expect(calendar.events.get(legacyLocalId)?.identifier).toBe('legacy-event');
+  });
+
+  it('allows an existing Calendar claim for the same workDate in another timezone', async () => {
+    const value = await fixture();
+    const store = new JsonCalendarPublicationStore(value.dataDirectory);
+    await store.initialize({
+      draftId: '33333333-3333-4333-8333-333333333333', draftVersion: 1,
+      localId: 'other-zone-calendar', previewFingerprint: 'c'.repeat(64), calendarIdentifier: 'calendar-1',
+      workDate: '2026-10-24', timezone: 'America/Los_Angeles', dailyKey: 'other-zone',
+      timestamp: '2026-10-24T03:00:00.000Z',
+    });
+    await store.mark({
+      draftId: '33333333-3333-4333-8333-333333333333', draftVersion: 1,
+      status: 'SYNCED', eventIdentifier: 'other-zone-event', timestamp: '2026-10-24T03:01:00.000Z',
+    });
+    const preview = await new CalendarPublicationService(value.dataDirectory, new FakeCalendar()).preview({
+      draftId: value.draftId, version: 1,
+    });
+    expect(preview).toMatchObject({
+      eventDisposition: 'CREATE',
+      localId: 'local-devlog:daily:2026-10-24:Asia%2FSeoul:calendar',
+    });
+  });
+
   it('records EventKit failure without changing Notion success', async () => {
     const value = await fixture();
     const notion = new JsonPublicationStore(value.dataDirectory);

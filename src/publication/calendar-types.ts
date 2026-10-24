@@ -9,6 +9,8 @@ export const CalendarPublicationRecordSchema = z.object({
   previewFingerprint: z.string().regex(/^[0-9a-f]{64}$/),
   calendarIdentifier: z.string().min(1),
   workDate: z.string().min(1),
+  timezone: z.string().min(1).optional(),
+  dailyKey: z.string().min(1).optional(),
   status: CalendarPublicationStatusSchema,
   attempts: z.number().int().nonnegative(),
   eventIdentifier: z.string().min(1).optional(),

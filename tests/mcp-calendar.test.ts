@@ -19,9 +19,12 @@ const connection: CalendarConnectionValidation = {
 };
 const preview: CalendarPublicationPreview = {
   draftId, draftVersion: 1, workDate: '2026-10-24', timezone: 'Asia/Seoul',
+  dailyKey: 'local-devlog:daily:2026-10-24:Asia%2FSeoul',
   localId: `${draftId}:v1:calendar`,
   calendar: { identifier: 'calendar-1', title: 'Development', sourceTitle: 'iCloud' },
   event: { title: '개발 일지 | 2026-10-24', notes: 'notes', notionWorkLogLinks: [] },
+  eventDisposition: 'CREATE',
+  sourceChangedAfterApproval: false,
   previewFingerprint: fingerprint,
   confirmationPhrase: calendarPublicationPhrase(draftId, 1, fingerprint),
   connection,
@@ -41,6 +44,7 @@ class FakePublication implements CalendarPublicationPort {
         status: 'SYNCED' as const, attempts: 1, eventIdentifier: 'event-1',
         createdAt: '2026-10-24T00:00:00.000Z', updatedAt: '2026-10-24T00:00:00.000Z',
       },
+      sourceChangedAfterApproval: false,
     };
   }
   async getStatus() { return { status: 'NOT_STARTED' as const }; }

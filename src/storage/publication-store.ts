@@ -60,9 +60,13 @@ export class JsonPublicationStore {
   async initialize(input: {
     draftId: string;
     draftVersion: number;
+    workDate: string;
+    timezone: string;
+    dailyKey: string;
     selectedNextActionIndexes: number[];
     previewFingerprint: string;
     items: Array<{ localId: string; kind: PublicationKind; sourceIndex: number }>;
+    adoptedWorkLog?: NotionPublicationRecord['items'][number];
     timestamp: string;
   }): Promise<NotionPublicationRecord> {
     return this.update((records) => {
@@ -70,20 +74,39 @@ export class JsonPublicationStore {
         draftId === input.draftId && draftVersion === input.draftVersion);
       const existing = index >= 0 ? records[index] : undefined;
       const existingItems = new Map(existing?.items.map((item) => [item.localId, item]));
-      const requestedItems = input.items.map((item) => existingItems.get(item.localId) ?? {
-        ...item,
-        status: 'PENDING' as const,
-        attempts: 0,
-        updatedAt: input.timestamp,
+      const requestedItems = input.items.map((item) => {
+        const current = existingItems.get(item.localId);
+        if (current) return current;
+        if (item.kind === 'WORK_LOG' && input.adoptedWorkLog) {
+          return {
+            ...item,
+            status: input.adoptedWorkLog.status,
+            attempts: input.adoptedWorkLog.attempts,
+            ...(input.adoptedWorkLog.externalId ? { externalId: input.adoptedWorkLog.externalId } : {}),
+            ...(input.adoptedWorkLog.errorCode ? { errorCode: input.adoptedWorkLog.errorCode } : {}),
+            updatedAt: input.timestamp,
+          };
+        }
+        return {
+          ...item,
+          status: 'PENDING' as const,
+          attempts: 0,
+          updatedAt: input.timestamp,
+        };
       });
       const requestedIds = new Set(requestedItems.map(({ localId }) => localId));
+      const replacesWorkLog = input.items.some(({ kind }) => kind === 'WORK_LOG');
       const items = [
-        ...(existing?.items.filter(({ localId }) => !requestedIds.has(localId)) ?? []),
+        ...(existing?.items.filter(({ localId, kind }) =>
+          !requestedIds.has(localId) && !(replacesWorkLog && kind === 'WORK_LOG')) ?? []),
         ...requestedItems,
       ];
       const record: NotionPublicationRecord = {
         draftId: input.draftId,
         draftVersion: input.draftVersion,
+        workDate: input.workDate,
+        timezone: input.timezone,
+        dailyKey: input.dailyKey,
         selectedNextActionIndexes: [...new Set([
           ...(existing?.selectedNextActionIndexes ?? []),
           ...input.selectedNextActionIndexes,

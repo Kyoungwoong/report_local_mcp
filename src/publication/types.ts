@@ -17,6 +17,9 @@ export const PublicationItemStateSchema = z.object({
 export const NotionPublicationRecordSchema = z.object({
   draftId: z.string().uuid(),
   draftVersion: z.number().int().positive(),
+  workDate: z.string().min(1).optional(),
+  timezone: z.string().min(1).optional(),
+  dailyKey: z.string().min(1).optional(),
   selectedNextActionIndexes: z.array(z.number().int().nonnegative()),
   lastPreviewFingerprint: z.string().regex(/^[0-9a-f]{64}$/),
   items: z.array(PublicationItemStateSchema),

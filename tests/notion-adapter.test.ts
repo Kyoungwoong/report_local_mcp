@@ -62,6 +62,10 @@ class FakeApi implements NotionApi {
     return this.queryResult;
   }
 
+  async queryWorkLogsByDate(): Promise<Array<{ id: string; localId?: string }>> {
+    return [];
+  }
+
   async createPage(parameters: CreatePageParameters): Promise<string> {
     this.created.push(parameters);
     return `page-${this.created.length}`;
@@ -133,7 +137,12 @@ describe('Notion adapter', () => {
     })).resolves.toBe('page-1');
     await expect(adapter.createWorkLog({
       localId: 'local-log', title: 'Log', workDate: '2026-10-24', repositoryUrl: 'https://example.invalid/repo.git',
-      summary: 'Summary', details: 'Detailed work', verificationStatus: 'UNCONFIRMED', sourceEventIds: ['a'.repeat(64)],
+      summary: 'Summary', repositories: [{
+        repositoryId: 'b'.repeat(64), name: 'repo', url: 'https://example.invalid/repo.git',
+        workItems: [{
+          title: 'Work', details: 'Detailed work', verificationStatus: 'UNCONFIRMED', sourceEventIds: ['a'.repeat(64)],
+        }],
+      }],
       draftId: '11111111-1111-4111-8111-111111111111', draftVersion: 1,
     })).resolves.toBe('page-2');
     expect(api.created[1]).toMatchObject({ markdown: expect.stringContaining('Detailed work') });

@@ -100,6 +100,18 @@ func marker(_ localId: String) -> String {
     "Local DevLog Calendar ID: \(localId)"
 }
 
+func localDevLogId(_ notes: String?) -> String? {
+    notes?.split(separator: "\n")
+        .first(where: { $0.hasPrefix("Local DevLog Calendar ID: ") })
+        .map { String($0.dropFirst("Local DevLog Calendar ID: ".count)) }
+}
+
+func eventTimezone(_ notes: String?) -> String? {
+    notes?.split(separator: "\n")
+        .first(where: { $0.hasPrefix("시간대: ") })
+        .map { String($0.dropFirst("시간대: ".count)) }
+}
+
 func calendarResult(_ calendar: EKCalendar) -> [String: Any] {
     [
         "identifier": calendar.calendarIdentifier,
@@ -166,14 +178,25 @@ struct LocalDevLogCalendarBridge {
                 let events = store.events(matching: store.predicateForEvents(
                     withStart: start,
                     end: end,
-                    calendars: [target]
+                    calendars: nil
                 ))
                 if let event = events.first(where: { $0.notes?.contains(expectedMarker) == true }),
                    let identifier = event.eventIdentifier {
+                    let eventCalendarIdentifier = event.calendar.calendarIdentifier
                     emit(["ok": true, "result": [
-                        "status": "MATCH",
+                        "status": eventCalendarIdentifier == target.calendarIdentifier ? "MATCH" : "MOVED",
                         "eventIdentifier": identifier,
-                        "calendarIdentifier": target.calendarIdentifier,
+                        "calendarIdentifier": eventCalendarIdentifier,
+                    ]])
+                } else if let event = events.first(where: {
+                    localDevLogId($0.notes) != nil && eventTimezone($0.notes) == timezoneName
+                }), let identifier = event.eventIdentifier,
+                   let existingLocalId = localDevLogId(event.notes) {
+                    emit(["ok": true, "result": [
+                        "status": "CONFLICT",
+                        "eventIdentifier": identifier,
+                        "calendarIdentifier": event.calendar.calendarIdentifier,
+                        "existingLocalId": existingLocalId,
                     ]])
                 } else {
                     emit(["ok": true, "result": ["status": "MISSING"]])

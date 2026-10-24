@@ -24,9 +24,13 @@ const preview: NotionPublicationPreview = {
   draftId,
   draftVersion: 1,
   workDate: '2026-10-24',
+  timezone: 'Asia/Seoul',
+  dailyKey: 'local-devlog:daily:2026-10-24:Asia%2FSeoul',
   selectedNextActionIndexes: [0],
   workLogs: [],
   tasks: [],
+  workLogDisposition: 'CREATE',
+  sourceChangedAfterApproval: false,
   previewFingerprint,
   confirmationPhrase: notionPublicationPhrase(draftId, 1, previewFingerprint),
   notion: connection,
@@ -55,6 +59,7 @@ class FakePublication implements NotionPublicationPort {
       synced: 0,
       failed: 0,
       skipped: 0,
+      sourceChangedAfterApproval: false,
     };
   }
 

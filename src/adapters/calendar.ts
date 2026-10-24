@@ -40,9 +40,10 @@ const ValidateResultSchema = z.object({
   calendars: z.array(CalendarInfoSchema),
 });
 const LookupResultSchema = z.object({
-  status: z.enum(['MATCH', 'MISSING', 'MOVED']),
+  status: z.enum(['MATCH', 'MISSING', 'MOVED', 'CONFLICT']),
   eventIdentifier: z.string().min(1).optional(),
   calendarIdentifier: z.string().min(1).optional(),
+  existingLocalId: z.string().min(1).optional(),
 });
 const CreateResultSchema = z.object({ eventIdentifier: z.string().min(1) });
 const BridgeResponseSchema = z.object({

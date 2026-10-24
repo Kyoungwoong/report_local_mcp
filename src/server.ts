@@ -98,7 +98,7 @@ export function createServer(
   notionFactory?: NotionToolServicesFactory,
   calendarFactory?: CalendarToolServicesFactory,
 ): McpServer {
-  const server = new McpServer({ name: 'local-devlog-mcp', version: '0.4.0' });
+  const server = new McpServer({ name: 'local-devlog-mcp', version: '0.4.1' });
   const drafts = new DailyDraftService(dataDirectory);
   let notionServices: Promise<NotionToolServices> | undefined;
   const getNotionServices = (): Promise<NotionToolServices> => {

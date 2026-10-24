@@ -41,6 +41,7 @@ export interface NotionApi {
     properties: Record<string, NotionPropertySummary>;
   }>;
   queryDataSource(dataSourceId: string, propertyName: string, localId: string): Promise<string[]>;
+  queryWorkLogsByDate(dataSourceId: string, workDate: string): Promise<Array<{ id: string; localId?: string }>>;
   createPage(parameters: CreatePageParameters): Promise<string>;
 }
 
@@ -173,6 +174,22 @@ export class SdkNotionApi implements NotionApi {
     return response.results.filter(({ object }) => object === 'page').map(({ id }) => id);
   }
 
+  async queryWorkLogsByDate(dataSourceId: string, workDate: string): Promise<Array<{ id: string; localId?: string }>> {
+    const response = await this.request(() => this.client.dataSources.query({
+      data_source_id: dataSourceId,
+      page_size: 100,
+      result_type: 'page',
+      filter: { property: 'Date', date: { equals: workDate } },
+    }));
+    return response.results.filter(({ object }) => object === 'page').map((page) => {
+      if (!('properties' in page)) return { id: page.id };
+      const property = page.properties['Local ID'];
+      if (!property || property.type !== 'rich_text') return { id: page.id };
+      const localId = property.rich_text.map(({ plain_text }) => plain_text).join('');
+      return { id: page.id, ...(localId ? { localId } : {}) };
+    });
+  }
+
   async createPage(parameters: CreatePageParameters): Promise<string> {
     return (await this.request(() => this.client.pages.create(parameters))).id;
   }
@@ -226,18 +243,29 @@ export type CreateWorkLogInput = {
   workDate: string;
   repositoryUrl?: string;
   summary: string;
-  details: string;
-  verificationStatus: 'REMOTE_MATCH' | 'UNCONFIRMED';
-  sourceEventIds: string[];
+  repositories: Array<{
+    repositoryId: string;
+    name: string;
+    url?: string;
+    workItems: Array<{
+      title: string;
+      details: string;
+      verificationStatus: 'REMOTE_MATCH' | 'UNCONFIRMED';
+      sourceEventIds: string[];
+    }>;
+  }>;
   draftId: string;
   draftVersion: number;
 };
+
+export type RemoteWorkLog = { id: string; localId?: string };
 
 export interface NotionPort {
   validateConnection(): Promise<NotionConnectionValidation>;
   findTaskByLocalId(localId: string): Promise<string | undefined>;
   createTask(input: CreateTaskInput): Promise<string>;
   findWorkLogByLocalId(localId: string): Promise<string | undefined>;
+  findWorkLogsByDate(workDate: string): Promise<RemoteWorkLog[]>;
   createWorkLog(input: CreateWorkLogInput): Promise<string>;
 }
 
@@ -392,6 +420,11 @@ export class NotionAdapter implements NotionPort {
     return (await this.api.queryDataSource(targets.workLogs.dataSourceId, 'Local ID', localId))[0];
   }
 
+  async findWorkLogsByDate(workDate: string): Promise<RemoteWorkLog[]> {
+    const targets = await this.targets();
+    return this.api.queryWorkLogsByDate(targets.workLogs.dataSourceId, workDate);
+  }
+
   async createWorkLog(input: CreateWorkLogInput): Promise<string> {
     const targets = await this.targets();
     const properties: NonNullable<CreatePageParameters['properties']> = {
@@ -401,13 +434,24 @@ export class NotionAdapter implements NotionPort {
       'Local ID': { type: 'rich_text', rich_text: richText(input.localId) },
     };
     if (input.repositoryUrl) properties.Repository = { type: 'url', url: input.repositoryUrl };
+    const repositorySections = input.repositories.flatMap((repository) => [
+      `## ${repository.name}`,
+      ...(repository.url ? [`Repository: ${repository.url}`, ''] : []),
+      ...repository.workItems.flatMap((item) => [
+        `### ${item.title}`,
+        item.details || '_No additional details were supplied._',
+        '',
+        `- Verification: ${item.verificationStatus}`,
+        `- Source events: ${item.sourceEventIds.join(', ')}`,
+        '',
+      ]),
+    ]);
     const markdown = [
-      '## Details',
-      input.details || '_No additional details were supplied._',
+      '## Daily Summary',
+      input.summary,
       '',
-      `- Verification: ${input.verificationStatus}`,
-      `- Source events: ${input.sourceEventIds.join(', ')}`,
-      `- Approved draft: ${input.draftId} v${input.draftVersion}`,
+      ...repositorySections,
+      `Approved draft: ${input.draftId} v${input.draftVersion}`,
     ].join('\n');
     return this.api.createPage({
       parent: { type: 'data_source_id', data_source_id: targets.workLogs.dataSourceId },

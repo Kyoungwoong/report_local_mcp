@@ -4,14 +4,17 @@ import {
   CalendarAdapterError,
   type CalendarConnectionValidation,
   type CalendarEventInput,
+  type CalendarEventLookup,
   type CalendarPort,
 } from '../adapters/calendar.js';
-import type { DailyDraft } from '../drafts/types.js';
+import type { DailyDraft, DraftRecord } from '../drafts/types.js';
 import type { CalendarPublicationRecord } from '../publication/calendar-types.js';
+import { dailyCalendarLocalId, dailyPublicationKey } from '../publication/daily-key.js';
 import { JsonCalendarPublicationStore } from '../storage/calendar-publication-store.js';
 import { JsonDraftStore } from '../storage/draft-store.js';
-import { withFileLock, JsonEventStore } from '../storage/json-store.js';
+import { JsonEventStore, withFileLock } from '../storage/json-store.js';
 import { JsonPublicationStore } from '../storage/publication-store.js';
+import { getDailyActivity } from './activity.js';
 
 export type CalendarPublicationErrorCode =
   | 'DRAFT_NOT_FOUND'
@@ -22,6 +25,7 @@ export type CalendarPublicationErrorCode =
   | 'CALENDAR_NOT_CONFIGURED'
   | 'CALENDAR_NOT_FOUND'
   | 'CALENDAR_CONNECTION_INVALID'
+  | 'DAILY_PUBLICATION_CONFLICT'
   | 'STORAGE_ERROR';
 
 export class CalendarPublicationError extends Error {
@@ -31,14 +35,24 @@ export class CalendarPublicationError extends Error {
   }
 }
 
+export type CalendarEventDisposition =
+  | 'CREATE'
+  | 'SKIP_EXISTING'
+  | 'RECOVER_REMOTE'
+  | 'RECREATE_DELETED'
+  | 'RECREATE_MOVED';
+
 export type CalendarPublicationPreview = {
   draftId: string;
   draftVersion: number;
   workDate: string;
   timezone: string;
+  dailyKey: string;
   localId: string;
   calendar: { identifier: string; title: string; sourceTitle: string };
   event: { title: string; notes: string; notionWorkLogLinks: string[] };
+  eventDisposition: CalendarEventDisposition;
+  sourceChangedAfterApproval: boolean;
   previewFingerprint: string;
   confirmationPhrase: string;
   connection: CalendarConnectionValidation;
@@ -48,13 +62,15 @@ export type CalendarPublicationResult = {
   status: 'SYNCED' | 'FAILED';
   action: 'CREATED' | 'RECOVERED' | 'SKIPPED' | 'RECREATED_DELETED' | 'RECREATED_MOVED' | 'FAILED';
   record: CalendarPublicationRecord;
+  sourceChangedAfterApproval: boolean;
 };
 
 export type CalendarPublicationStatus =
   | { status: 'NOT_STARTED' }
   | {
-    status: 'SYNCED' | 'FAILED' | 'MISSING' | 'MOVED' | 'UNAVAILABLE';
+    status: 'SYNCED' | 'FAILED' | 'MISSING' | 'MOVED' | 'CONFLICT' | 'UNAVAILABLE';
     record: CalendarPublicationRecord;
+    sourceChangedAfterApproval: boolean;
     remoteErrorCode?: string;
   };
 
@@ -71,7 +87,7 @@ export interface CalendarPublicationPort {
 
 type Clock = () => Date;
 
-function latestDraft(records: Awaited<ReturnType<JsonDraftStore['read']>>, draftId: string): DailyDraft {
+function latestDraft(records: DraftRecord[], draftId: string): DailyDraft {
   const record = records.find((candidate) => candidate.draftId === draftId);
   if (!record) throw new CalendarPublicationError('DRAFT_NOT_FOUND', `Draft not found: ${draftId}`);
   return record.revisions[record.revisions.length - 1]!;
@@ -97,6 +113,65 @@ function notionUrl(pageId: string): string {
   return `https://www.notion.so/${pageId.replaceAll('-', '')}`;
 }
 
+function recordDate(record: CalendarPublicationRecord, drafts: DraftRecord[]): { workDate: string; timezone: string } | undefined {
+  if (record.timezone) return { workDate: record.workDate, timezone: record.timezone };
+  const draft = drafts.find(({ draftId }) => draftId === record.draftId);
+  return draft ? { workDate: draft.workDate, timezone: draft.timezone } : undefined;
+}
+
+function localCalendarClaim(
+  draft: DailyDraft,
+  draftRecords: DraftRecord[],
+  records: CalendarPublicationRecord[],
+): CalendarPublicationRecord | undefined {
+  let own: CalendarPublicationRecord | undefined;
+  for (const record of records) {
+    const date = recordDate(record, draftRecords);
+    if (!date || date.workDate !== draft.workDate || date.timezone !== draft.timezone) continue;
+    if (record.draftId === draft.draftId && record.draftVersion === draft.version) {
+      own = record;
+      continue;
+    }
+    if (record.status === 'SYNCED' && record.eventIdentifier) {
+      throw new CalendarPublicationError(
+        'DAILY_PUBLICATION_CONFLICT',
+        `A Calendar event for ${draft.workDate} (${draft.timezone}) was already published by draft ${record.draftId} v${record.draftVersion}`,
+      );
+    }
+  }
+  return own;
+}
+
+function disposition(lookup: CalendarEventLookup, own?: CalendarPublicationRecord): CalendarEventDisposition {
+  if (!own) {
+    if (lookup.status !== 'MISSING') {
+      throw new CalendarPublicationError(
+        'DAILY_PUBLICATION_CONFLICT',
+        `A different Local DevLog event already claims this work date${lookup.eventIdentifier ? ` (${lookup.eventIdentifier})` : ''}`,
+      );
+    }
+    return 'CREATE';
+  }
+  if (lookup.status === 'CONFLICT') {
+    throw new CalendarPublicationError(
+      'DAILY_PUBLICATION_CONFLICT',
+      `A different Local DevLog event already claims this work date${lookup.eventIdentifier ? ` (${lookup.eventIdentifier})` : ''}`,
+    );
+  }
+  if (lookup.status === 'MATCH') {
+    return own.status === 'SYNCED' && own.eventIdentifier === lookup.eventIdentifier
+      ? 'SKIP_EXISTING'
+      : 'RECOVER_REMOTE';
+  }
+  if (lookup.status === 'MOVED') return 'RECREATE_MOVED';
+  return own.eventIdentifier ? 'RECREATE_DELETED' : 'CREATE';
+}
+
+async function sourceChanged(draft: DailyDraft, dataDirectory: string): Promise<boolean> {
+  const activity = await getDailyActivity(draft.workDate, dataDirectory, draft.timezone);
+  return activity.sourceFingerprint !== draft.sourceFingerprint;
+}
+
 export function calendarPublicationPhrase(draftId: string, version: number, previewFingerprint: string): string {
   return `PUBLISH_CALENDAR:${draftId}:v${version}:${previewFingerprint.slice(0, 12)}`;
 }
@@ -113,8 +188,10 @@ export class CalendarPublicationService implements CalendarPublicationPort {
   ) {}
 
   async preview(input: { draftId: string; version: number }): Promise<CalendarPublicationPreview> {
-    const draft = latestDraft(await this.drafts.read(), input.draftId);
+    const draftRecords = await this.drafts.read();
+    const draft = latestDraft(draftRecords, input.draftId);
     validateApprovedVersion(draft, input.version);
+    const own = localCalendarClaim(draft, draftRecords, await this.calendarPublications.read());
     const connection = await this.calendar.validateConnection(false);
     if (connection.authorizationStatus !== 'FULL_ACCESS') {
       throw new CalendarPublicationError(
@@ -142,7 +219,8 @@ export class CalendarPublicationService implements CalendarPublicationPort {
     const notionWorkLogLinks = notion?.items
       .filter(({ kind, status, externalId }) => kind === 'WORK_LOG' && status === 'SYNCED' && externalId)
       .map(({ externalId }) => notionUrl(externalId!)) ?? [];
-    const localId = `${draft.draftId}:v${draft.version}:calendar`;
+    const dailyKey = dailyPublicationKey(draft.workDate, draft.timezone);
+    const localId = own?.localId ?? dailyCalendarLocalId(draft.workDate, draft.timezone);
     const title = `개발 일지 | ${draft.workDate}`;
     const workLines = draft.workItems.flatMap((item) => {
       const repository = item.sourceEventIds.map((id) => eventNames.get(id)).find(Boolean) ?? item.repositoryId;
@@ -178,16 +256,39 @@ export class CalendarPublicationService implements CalendarPublicationPort {
       title: connection.configured.title,
       sourceTitle: connection.configured.sourceTitle,
     };
+    const eventInput: CalendarEventInput = {
+      calendarIdentifier: calendar.identifier,
+      localId,
+      workDate: draft.workDate,
+      timezone: draft.timezone,
+      title,
+      notes,
+    };
+    const eventDisposition = disposition(await this.calendar.findEvent(eventInput, own?.eventIdentifier), own);
+    const sourceChangedAfterApproval = await sourceChanged(draft, this.dataDirectory);
     const previewValue = {
       draftId: draft.draftId,
       draftVersion: draft.version,
       workDate: draft.workDate,
       timezone: draft.timezone,
+      dailyKey,
       localId,
       calendar,
       event: { title, notes, notionWorkLogLinks },
+      eventDisposition,
+      sourceChangedAfterApproval,
     };
-    const previewFingerprint = fingerprint(previewValue);
+    const previewFingerprint = fingerprint({
+      draftId: previewValue.draftId,
+      draftVersion: previewValue.draftVersion,
+      workDate: previewValue.workDate,
+      timezone: previewValue.timezone,
+      dailyKey: previewValue.dailyKey,
+      localId: previewValue.localId,
+      calendar: previewValue.calendar,
+      event: previewValue.event,
+      sourceChangedAfterApproval: previewValue.sourceChangedAfterApproval,
+    });
     return {
       ...previewValue,
       previewFingerprint,
@@ -228,15 +329,26 @@ export class CalendarPublicationService implements CalendarPublicationPort {
         previewFingerprint: preview.previewFingerprint,
         calendarIdentifier: preview.calendar.identifier,
         workDate: preview.workDate,
+        timezone: preview.timezone,
+        dailyKey: preview.dailyKey,
         timestamp: this.clock().toISOString(),
       });
       const hadExistingEvent = record.eventIdentifier !== undefined;
       const eventInput = this.eventInput(preview);
       try {
         const lookup = await this.calendar.findEvent(eventInput, record.eventIdentifier);
+        if (lookup.status === 'CONFLICT') {
+          throw new CalendarPublicationError(
+            'DAILY_PUBLICATION_CONFLICT',
+            `A different Local DevLog event already claims ${preview.workDate} (${preview.timezone})`,
+          );
+        }
         if (lookup.status === 'MATCH' && lookup.eventIdentifier) {
           if (record.status === 'SYNCED' && record.eventIdentifier === lookup.eventIdentifier) {
-            return { status: 'SYNCED', action: 'SKIPPED', record };
+            return {
+              status: 'SYNCED', action: 'SKIPPED', record,
+              sourceChangedAfterApproval: preview.sourceChangedAfterApproval,
+            };
           }
           record = await this.calendarPublications.mark({
             draftId: preview.draftId,
@@ -245,7 +357,10 @@ export class CalendarPublicationService implements CalendarPublicationPort {
             eventIdentifier: lookup.eventIdentifier,
             timestamp: this.clock().toISOString(),
           });
-          return { status: 'SYNCED', action: 'RECOVERED', record };
+          return {
+            status: 'SYNCED', action: 'RECOVERED', record,
+            sourceChangedAfterApproval: preview.sourceChangedAfterApproval,
+          };
         }
         const eventIdentifier = await this.calendar.createEvent(eventInput);
         record = await this.calendarPublications.mark({
@@ -257,12 +372,12 @@ export class CalendarPublicationService implements CalendarPublicationPort {
         });
         return {
           status: 'SYNCED',
-          action: lookup.status === 'MOVED'
-            ? 'RECREATED_MOVED'
-            : hadExistingEvent ? 'RECREATED_DELETED' : 'CREATED',
+          action: lookup.status === 'MOVED' ? 'RECREATED_MOVED' : hadExistingEvent ? 'RECREATED_DELETED' : 'CREATED',
           record,
+          sourceChangedAfterApproval: preview.sourceChangedAfterApproval,
         };
       } catch (error) {
+        if (error instanceof CalendarPublicationError) throw error;
         if (!(error instanceof CalendarAdapterError)) throw error;
         record = await this.calendarPublications.mark({
           draftId: preview.draftId,
@@ -271,7 +386,10 @@ export class CalendarPublicationService implements CalendarPublicationPort {
           errorCode: error.code,
           timestamp: this.clock().toISOString(),
         });
-        return { status: 'FAILED', action: 'FAILED', record };
+        return {
+          status: 'FAILED', action: 'FAILED', record,
+          sourceChangedAfterApproval: preview.sourceChangedAfterApproval,
+        };
       }
     });
   }
@@ -279,17 +397,25 @@ export class CalendarPublicationService implements CalendarPublicationPort {
   async getStatus(draftId: string, version: number): Promise<CalendarPublicationStatus> {
     const record = await this.calendarPublications.get(draftId, version);
     if (!record) return { status: 'NOT_STARTED' };
-    if (record.status === 'FAILED') return { status: 'FAILED', record };
+    const draft = latestDraft(await this.drafts.read(), draftId);
+    const changed = await sourceChanged(draft, this.dataDirectory);
+    if (record.status === 'FAILED') return { status: 'FAILED', record, sourceChangedAfterApproval: changed };
     try {
       const preview = await this.preview({ draftId, version });
-      const lookup = await this.calendar.findEvent(this.eventInput(preview), record.eventIdentifier);
-      if (lookup.status === 'MISSING') return { status: 'MISSING', record };
-      if (lookup.status === 'MOVED') return { status: 'MOVED', record };
-      return { status: 'SYNCED', record };
+      if (preview.eventDisposition === 'RECREATE_DELETED') {
+        return { status: 'MISSING', record, sourceChangedAfterApproval: changed };
+      }
+      if (preview.eventDisposition === 'RECREATE_MOVED') {
+        return { status: 'MOVED', record, sourceChangedAfterApproval: changed };
+      }
+      return { status: 'SYNCED', record, sourceChangedAfterApproval: changed };
     } catch (error) {
       return {
-        status: 'UNAVAILABLE',
+        status: error instanceof CalendarPublicationError && error.code === 'DAILY_PUBLICATION_CONFLICT'
+          ? 'CONFLICT'
+          : 'UNAVAILABLE',
         record,
+        sourceChangedAfterApproval: changed,
         remoteErrorCode: error instanceof Error && 'code' in error && typeof error.code === 'string'
           ? error.code
           : 'CALENDAR_CONNECTION_INVALID',

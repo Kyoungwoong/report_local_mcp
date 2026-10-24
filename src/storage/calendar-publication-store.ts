@@ -60,6 +60,8 @@ export class JsonCalendarPublicationStore {
     previewFingerprint: string;
     calendarIdentifier: string;
     workDate: string;
+    timezone: string;
+    dailyKey: string;
     timestamp: string;
   }): Promise<CalendarPublicationRecord> {
     return this.update((records) => {
@@ -73,6 +75,8 @@ export class JsonCalendarPublicationStore {
         previewFingerprint: input.previewFingerprint,
         calendarIdentifier: input.calendarIdentifier,
         workDate: input.workDate,
+        timezone: input.timezone,
+        dailyKey: input.dailyKey,
         status: existing?.status ?? 'PENDING',
         attempts: existing?.attempts ?? 0,
         ...(existing?.eventIdentifier ? { eventIdentifier: existing.eventIdentifier } : {}),
