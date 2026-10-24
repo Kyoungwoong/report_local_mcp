@@ -1,14 +1,15 @@
 {
   "name": "local-devlog-mcp",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "engines": {
     "node": ">=20"
   },
   "scripts": {
-    "build": "pnpm build:server && pnpm build:app",
+    "build": "pnpm build:server && pnpm build:calendar && pnpm build:app",
     "build:server": "tsc -p tsconfig.json",
+    "build:calendar": "node scripts/build-calendar.mjs",
     "build:app": "vite build",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.app.json",
     "test": "vitest run",
@@ -16,6 +17,8 @@
     "start": "node dist/index.js",
     "setup": "tsx src/cli/setup.ts",
     "notion:validate": "tsx src/cli/validate-notion.ts",
+    "test:calendar:integration": "RUN_CALENDAR_INTEGRATION=1 vitest run tests/calendar-integration.test.ts",
+    "test:calendar:write": "RUN_CALENDAR_INTEGRATION=1 RUN_CALENDAR_WRITE_INTEGRATION=1 vitest run tests/calendar-integration.test.ts",
     "test:notion:integration": "RUN_NOTION_INTEGRATION=1 vitest run tests/notion-integration.test.ts"
   },
   "dependencies": {

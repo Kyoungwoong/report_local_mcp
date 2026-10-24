@@ -1,5 +1,10 @@
 {
   "version": 1,
   "timezone": "Asia/Seoul",
+  "calendar": {
+    "identifier": "select-with-pnpm-run-setup-calendar-set",
+    "title": "Development",
+    "sourceTitle": "iCloud"
+  },
   "repositories": []
 }

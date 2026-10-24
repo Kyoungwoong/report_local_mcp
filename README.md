@@ -1,6 +1,6 @@
 # Local DevLog MCP
 
-**Status: Milestone 3 complete / Apple Calendar is not implemented.** A macOS-first, open-source MCP that records Git push attempts, stores versioned human-approved drafts, and explicitly publishes approved work to Notion.
+**Status: Milestone 4 implemented / live Calendar write requires opt-in verification.** A macOS-first, open-source MCP that records Git push attempts, stores versioned human-approved drafts, and explicitly publishes approved work to Notion and Apple Calendar.
 
 ## What works
 - Multiple local Git repositories can be registered with `pnpm run setup`.
@@ -14,12 +14,12 @@
 - Notion Database/Data Source configuration can be validated read-only against API version `2026-03-11`.
 - Approved Work Items can be published to Work Logs and explicitly selected Next Actions to Tasks.
 - Notion publication uses deterministic Local IDs and per-item local state for duplicate prevention and partial-failure retry.
-
-## Planned MVP (not yet implemented)
-Apple Calendar EventKit bridge and cross-target partial-failure recovery. Only approved drafts will be eligible for Calendar publication.
+- Approved drafts can be previewed and explicitly published as all-day Apple Calendar events through a Swift EventKit bridge.
+- Notion and Calendar publication states are independent; a failure in one target does not erase the other target's success.
+- Calendar publication uses a deterministic marker plus the EventKit identifier for duplicate prevention and crash recovery.
 
 ## Requirements
-macOS, Node.js >=20, pnpm, Git. Calendar bridge will additionally require Xcode Command Line Tools and calendar permission.
+macOS 14 or newer, Node.js >=20, pnpm, Git, Xcode Command Line Tools, and Apple Calendar full-access permission.
 
 ## Start
 ```bash
@@ -123,6 +123,40 @@ Publication is deliberately two-phase:
 
 Approval alone never publishes. Every Work Item becomes one Work Log, while only explicitly selected Next Actions become Tasks. Work Log details are written in the page body. The local status is stored in `notion-publications.json`; if a remote create succeeds before local persistence, retry queries the Local ID before creating anything else.
 
+## Apple Calendar setup and publication
+
+The Calendar bridge requests full access because selecting a named Calendar and safely finding an existing event require read access as well as write access. Local DevLog never creates, renames, or deletes a Calendar.
+
+Build the bridge, list writable Calendars, and store one exact EventKit identifier:
+
+```bash
+pnpm build
+pnpm run setup -- calendar list
+pnpm run setup -- calendar set <calendar-identifier>
+```
+
+`calendar list` is the explicit permission-request step. macOS should show a full-access prompt for **Local DevLog Calendar Bridge**; depending on how the MCP host was launched, System Settings may associate the request with the host application or terminal. If access was denied, enable it under **System Settings → Privacy & Security → Calendars**, then run the command again. Use `pnpm run setup -- calendar clear` to remove only the local selection; existing events are never changed.
+
+Calendar publication is also two-phase:
+
+1. Call `validate_calendar_connection` without `requestPermission` to inspect current permission and configuration. Set `requestPermission: true` only when the user explicitly wants the macOS prompt.
+2. Call `preview_calendar_publication` with an approved `draftId` and exact approved `version`.
+3. Review the target Calendar, all-day event title/body, Notion links, and `previewFingerprint`.
+4. Call `publish_to_calendar` with the same fingerprint. Native Elicitation or the exact returned fallback phrase is required before EventKit writes.
+5. Call `get_calendar_publication_status` to verify the local record and current EventKit event.
+
+The event date uses the Draft's configured IANA timezone; Git timestamps are never interpreted as work start or end times. The body contains the summary, repository work, next actions, Draft/version marker, and any already-synced Notion Work Log links.
+
+State is stored in `calendar-publications.json`, separately from Notion. If EventKit succeeds before local state can be saved, retry finds the event by its stable Local DevLog marker. If the user deletes or moves the event, the status reports `MISSING` or `MOVED`; a newly confirmed publication creates a replacement in the configured Calendar without modifying the moved event.
+
+The read-only live check is opt-in:
+
+```bash
+pnpm test:calendar:integration
+```
+
+The write integration test additionally requires `CALENDAR_TEST_DRAFT_ID`, `CALENDAR_TEST_DRAFT_VERSION`, and the exact `CALENDAR_PUBLICATION_CONFIRMATION` returned by the preview. Do not run `pnpm test:calendar:write` without reviewing that preview.
+
 ## Repository setup
 
 Configuration, events, drafts, and publication state are stored outside this checkout at `~/Library/Application Support/local-devlog-mcp/`. The Notion token remains in `.env` or the process environment and is never copied into local JSON. No diff content is stored.
@@ -139,6 +173,10 @@ pnpm run setup -- list
 
 # Change the calendar timezone used by get_daily_activity.
 pnpm run setup -- timezone America/Los_Angeles
+
+# Select the only Calendar Local DevLog may write to.
+pnpm run setup -- calendar list
+pnpm run setup -- calendar set <calendar-identifier>
 
 # Remove only the matching Local DevLog hook and registration.
 pnpm run setup -- remove ~/Projects/one

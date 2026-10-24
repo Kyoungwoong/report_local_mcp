@@ -3,12 +3,19 @@ import { registerAppResource, registerAppTool, RESOURCE_MIME_TYPE } from '@model
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
+import { CalendarAdapter, type CalendarConnectionValidation } from './adapters/calendar.js';
 import { NotionAdapter, type NotionConnectionValidation } from './adapters/notion.js';
 import { getDataDirectory, isValidTimeZone } from './config/index.js';
 import { loadNotionEnvironment } from './config/notion.js';
 import { DailyDraftSchema, DraftContentInputSchema, DraftStatusSchema } from './drafts/types.js';
 import { getDailyActivity, isCalendarDate } from './services/activity.js';
 import { approvalPhrase, DailyDraftService, DraftError, type DraftResult } from './services/daily-log.js';
+import {
+  calendarPublicationPhrase,
+  type CalendarPublicationPort,
+  CalendarPublicationService,
+  CalendarPublicationError,
+} from './services/calendar-publisher.js';
 import {
   notionPublicationPhrase,
   type NotionPublicationPort,
@@ -23,6 +30,11 @@ export type NotionToolServices = {
   publication: NotionPublicationPort;
 };
 export type NotionToolServicesFactory = () => Promise<NotionToolServices>;
+export type CalendarToolServices = {
+  adapter: { validateConnection(requestPermission?: boolean): Promise<CalendarConnectionValidation> };
+  publication: CalendarPublicationPort;
+};
+export type CalendarToolServicesFactory = () => Promise<CalendarToolServices>;
 const defaultAppHtmlLoader: AppHtmlLoader = () => readFile(new URL('./apps/daily-draft.html', import.meta.url), 'utf8');
 
 const DraftToolOutputShape = {
@@ -84,8 +96,9 @@ export function createServer(
   dataDirectory = getDataDirectory(),
   appHtmlLoader: AppHtmlLoader = defaultAppHtmlLoader,
   notionFactory?: NotionToolServicesFactory,
+  calendarFactory?: CalendarToolServicesFactory,
 ): McpServer {
-  const server = new McpServer({ name: 'local-devlog-mcp', version: '0.3.0' });
+  const server = new McpServer({ name: 'local-devlog-mcp', version: '0.4.0' });
   const drafts = new DailyDraftService(dataDirectory);
   let notionServices: Promise<NotionToolServices> | undefined;
   const getNotionServices = (): Promise<NotionToolServices> => {
@@ -99,6 +112,19 @@ export function createServer(
         };
       });
     return notionServices;
+  };
+  let calendarServices: Promise<CalendarToolServices> | undefined;
+  const getCalendarServices = (): Promise<CalendarToolServices> => {
+    calendarServices ??= calendarFactory
+      ? calendarFactory()
+      : Promise.resolve().then(() => {
+        const adapter = new CalendarAdapter(dataDirectory);
+        return {
+          adapter,
+          publication: new CalendarPublicationService(dataDirectory, adapter),
+        };
+      });
+    return calendarServices;
   };
 
   server.registerTool('ping', {
@@ -377,6 +403,108 @@ export function createServer(
   }, async ({ draftId, version }) => {
     try {
       const { publication } = await getNotionServices();
+      return notionSuccess(await publication.getStatus(draftId, version));
+    } catch (error) {
+      return failure(error);
+    }
+  });
+
+  server.registerTool('validate_calendar_connection', {
+    description: 'Inspect Apple Calendar permission and configured target. Set requestPermission only when the user wants the macOS full-access prompt.',
+    inputSchema: { requestPermission: z.boolean().optional().default(false) },
+    outputSchema: NotionToolOutputShape,
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  }, async ({ requestPermission }) => {
+    try {
+      const { adapter } = await getCalendarServices();
+      return notionSuccess(await adapter.validateConnection(requestPermission));
+    } catch (error) {
+      return failure(error);
+    }
+  });
+
+  const calendarPublicationInput = {
+    draftId: z.string().uuid(),
+    version: z.number().int().positive(),
+  };
+
+  server.registerTool('preview_calendar_publication', {
+    description: 'Preview one all-day Apple Calendar event for an exact approved draft version. This performs no Calendar write.',
+    inputSchema: calendarPublicationInput,
+    outputSchema: NotionToolOutputShape,
+    annotations: { readOnlyHint: true, openWorldHint: true },
+  }, async (input) => {
+    try {
+      const { publication } = await getCalendarServices();
+      return notionSuccess(await publication.preview(input));
+    } catch (error) {
+      return failure(error);
+    }
+  });
+
+  server.registerTool('publish_to_calendar', {
+    description: 'Publish an exact, previously previewed approved draft version to Apple Calendar after explicit user confirmation.',
+    inputSchema: {
+      ...calendarPublicationInput,
+      previewFingerprint: z.string().regex(/^[0-9a-f]{64}$/),
+      confirmation: z.string().optional(),
+    },
+    outputSchema: NotionToolOutputShape,
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+  }, async ({ confirmation, ...input }) => {
+    try {
+      const { publication } = await getCalendarServices();
+      const preview = await publication.preview(input);
+      if (preview.previewFingerprint !== input.previewFingerprint) {
+        throw new CalendarPublicationError('PREVIEW_MISMATCH', 'Calendar preview changed; preview and confirm it again');
+      }
+      const phrase = calendarPublicationPhrase(input.draftId, input.version, input.previewFingerprint);
+      const supportsFormElicitation = server.server.getClientCapabilities()?.elicitation?.form !== undefined;
+      if (supportsFormElicitation) {
+        let elicitation;
+        try {
+          elicitation = await server.server.elicitInput({
+            mode: 'form',
+            message: `Publish approved draft ${preview.workDate} v${preview.draftVersion} as an all-day event in ${preview.calendar.title}?`,
+            requestedSchema: {
+              type: 'object',
+              properties: {
+                approved: { type: 'boolean', title: 'I explicitly authorize this Apple Calendar write' },
+                confirmation: {
+                  type: 'string',
+                  title: `Type ${phrase}`,
+                  minLength: phrase.length,
+                  maxLength: phrase.length,
+                },
+              },
+              required: ['approved', 'confirmation'],
+            },
+          });
+        } catch {
+          throw new CalendarPublicationError('PUBLICATION_NOT_AUTHORIZED', 'The host could not complete Calendar confirmation');
+        }
+        if (elicitation.action !== 'accept'
+          || elicitation.content?.approved !== true
+          || elicitation.content.confirmation !== phrase) {
+          throw new CalendarPublicationError('PUBLICATION_NOT_AUTHORIZED', 'Calendar publication was declined, cancelled, or not confirmed exactly');
+        }
+      } else if (confirmation !== phrase) {
+        throw new CalendarPublicationError('PUBLICATION_NOT_AUTHORIZED', `This client does not support form elicitation. Type exactly: ${phrase}`);
+      }
+      return notionSuccess(await publication.publish({ ...input, publicationAuthorized: true }));
+    } catch (error) {
+      return failure(error);
+    }
+  });
+
+  server.registerTool('get_calendar_publication_status', {
+    description: 'Read local Apple Calendar publication state and verify the event when Calendar access is available.',
+    inputSchema: calendarPublicationInput,
+    outputSchema: NotionToolOutputShape,
+    annotations: { readOnlyHint: true, openWorldHint: true },
+  }, async ({ draftId, version }) => {
+    try {
+      const { publication } = await getCalendarServices();
       return notionSuccess(await publication.getStatus(draftId, version));
     } catch (error) {
       return failure(error);

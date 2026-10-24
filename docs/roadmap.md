@@ -21,4 +21,4 @@ If calendar permissions delay delivery, release Notion-first beta and label Cale
 - Milestone 1: repository registration, fail-open pre-push collection, remote verification, and daily activity complete.
 - Milestone 2: versioned daily drafts, MCP Apps review UI, Elicitation-first approval, and fallback audit trail complete.
 - Milestone 3: Notion authentication/schema validation, Tasks and Work Logs publication, Local ID deduplication, and per-item retry complete.
-- Apple Calendar and cross-target publication recovery remain unimplemented.
+- Milestone 4: Swift EventKit bridge, explicit Calendar publication, duplicate recovery, and independent Notion/Calendar state implemented. Live Calendar write verification remains opt-in and must be explicitly approved.

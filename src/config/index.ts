@@ -24,13 +24,21 @@ export const RepositoryConfigSchema = z.object({
   addedAt: z.string().datetime(),
 });
 
+export const CalendarConfigSchema = z.object({
+  identifier: z.string().min(1),
+  title: z.string().min(1),
+  sourceTitle: z.string().min(1),
+});
+
 export const AppConfigSchema = z.object({
   version: z.literal(1),
   timezone: z.string().refine(isValidTimeZone, 'Invalid IANA timezone'),
   repositories: z.array(RepositoryConfigSchema),
+  calendar: CalendarConfigSchema.optional(),
 });
 
 export type RepositoryConfig = z.infer<typeof RepositoryConfigSchema>;
+export type CalendarConfig = z.infer<typeof CalendarConfigSchema>;
 export type AppConfig = z.infer<typeof AppConfigSchema>;
 
 export function getDataDirectory(environment: NodeJS.ProcessEnv = process.env): string {
