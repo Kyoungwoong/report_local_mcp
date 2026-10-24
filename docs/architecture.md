@@ -21,3 +21,12 @@ PENDING <-> REJECTED -> APPROVED -> (future: Notion SYNCED/FAILED, Calendar SYNC
 - Native MCP form Elicitation is the preferred human boundary. Clients without it must provide a draft/version-specific phrase, whose weaker trust guarantee is retained in `approvalMethod`.
 - The MCP App is a self-contained optional view over the same Tools. It has no direct storage or network access, and clients without Apps support retain full JSON/text behavior.
 - Approval must be explicit from the human, not inferred from model text. No external publication is permitted merely because a Tool was invoked.
+
+## Notion publication
+
+- Database containers and Data Sources are resolved separately using the pinned `2026-03-11` Notion API. Schema validation is read-only and never repairs user databases.
+- Preview binds the approved draft version, selected Next Actions, generated Work Logs, and a fingerprint. Publishing rejects a changed or unreviewed preview.
+- Publication requires a second explicit Elicitation confirmation because draft approval alone does not authorize an external write.
+- Every Work Log and Task has a deterministic Local ID. Before creation, the adapter queries that ID so a crash between the remote write and local persistence remains recoverable without duplication.
+- `notion-publications.json` tracks each target item independently as PENDING, SYNCED, or FAILED. Retry skips synced items and retries failed or locally uncertain items.
+- Detailed Work Item text is page body content; database properties retain compact searchable metadata. Tokens, diffs, and local repository paths are never published.

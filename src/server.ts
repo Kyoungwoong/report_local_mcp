@@ -3,13 +3,26 @@ import { registerAppResource, registerAppTool, RESOURCE_MIME_TYPE } from '@model
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
+import { NotionAdapter, type NotionConnectionValidation } from './adapters/notion.js';
 import { getDataDirectory, isValidTimeZone } from './config/index.js';
+import { loadNotionEnvironment } from './config/notion.js';
 import { DailyDraftSchema, DraftContentInputSchema, DraftStatusSchema } from './drafts/types.js';
 import { getDailyActivity, isCalendarDate } from './services/activity.js';
 import { approvalPhrase, DailyDraftService, DraftError, type DraftResult } from './services/daily-log.js';
+import {
+  notionPublicationPhrase,
+  type NotionPublicationPort,
+  NotionPublicationService,
+  PublicationError,
+} from './services/publisher.js';
 
 export const DAILY_DRAFT_APP_URI = 'ui://local-devlog/daily-draft.html';
 type AppHtmlLoader = () => Promise<string>;
+export type NotionToolServices = {
+  adapter: { validateConnection(): Promise<NotionConnectionValidation> };
+  publication: NotionPublicationPort;
+};
+export type NotionToolServicesFactory = () => Promise<NotionToolServices>;
 const defaultAppHtmlLoader: AppHtmlLoader = () => readFile(new URL('./apps/daily-draft.html', import.meta.url), 'utf8');
 
 const DraftToolOutputShape = {
@@ -25,6 +38,12 @@ const DraftListOutputShape = {
   code: z.string().optional(),
   message: z.string().optional(),
 };
+const NotionToolOutputShape = {
+  ok: z.boolean(),
+  result: z.record(z.unknown()).optional(),
+  code: z.string().optional(),
+  message: z.string().optional(),
+};
 const appMeta = {
   ui: { resourceUri: DAILY_DRAFT_APP_URI, visibility: ['model', 'app'] as const },
 };
@@ -37,9 +56,13 @@ function success(payload: Record<string, unknown>): CallToolResult {
 }
 
 function failure(error: unknown): CallToolResult {
+  const knownCode = error instanceof DraftError || error instanceof PublicationError
+    || (error instanceof Error && 'code' in error && typeof error.code === 'string')
+    ? error.code
+    : 'STORAGE_ERROR';
   const payload = {
     ok: false,
-    code: error instanceof DraftError ? error.code : 'STORAGE_ERROR',
+    code: knownCode,
     message: error instanceof Error ? error.message : 'Unexpected draft error',
   };
   return {
@@ -49,6 +72,10 @@ function failure(error: unknown): CallToolResult {
   };
 }
 
+function notionSuccess(result: Record<string, unknown>): CallToolResult {
+  return success({ ok: true, result });
+}
+
 function draftPayload(result: DraftResult): Record<string, unknown> {
   return { ok: true, draft: result.draft, revisions: result.revisions };
 }
@@ -56,9 +83,23 @@ function draftPayload(result: DraftResult): Record<string, unknown> {
 export function createServer(
   dataDirectory = getDataDirectory(),
   appHtmlLoader: AppHtmlLoader = defaultAppHtmlLoader,
+  notionFactory?: NotionToolServicesFactory,
 ): McpServer {
-  const server = new McpServer({ name: 'local-devlog-mcp', version: '0.2.0' });
+  const server = new McpServer({ name: 'local-devlog-mcp', version: '0.3.0' });
   const drafts = new DailyDraftService(dataDirectory);
+  let notionServices: Promise<NotionToolServices> | undefined;
+  const getNotionServices = (): Promise<NotionToolServices> => {
+    notionServices ??= notionFactory
+      ? notionFactory()
+      : loadNotionEnvironment().then((environment) => {
+        const adapter = new NotionAdapter(environment);
+        return {
+          adapter,
+          publication: new NotionPublicationService(dataDirectory, adapter),
+        };
+      });
+    return notionServices;
+  };
 
   server.registerTool('ping', {
     description: 'Check MCP connectivity',
@@ -239,6 +280,108 @@ export function createServer(
       _meta: { ui: { csp: { connectDomains: [], resourceDomains: [] } } },
     }],
   }));
+
+  server.registerTool('validate_notion_connection', {
+    description: 'Read Notion authentication, Database, Data Source, and property schemas without modifying Notion.',
+    outputSchema: NotionToolOutputShape,
+    annotations: { readOnlyHint: true, openWorldHint: true },
+  }, async () => {
+    try {
+      const { adapter } = await getNotionServices();
+      return notionSuccess(await adapter.validateConnection());
+    } catch (error) {
+      return failure(error);
+    }
+  });
+
+  const publicationInput = {
+    draftId: z.string().uuid(),
+    version: z.number().int().positive(),
+    selectedNextActionIndexes: z.array(z.number().int().nonnegative()).max(100),
+  };
+
+  server.registerTool('preview_notion_publication', {
+    description: 'Preview Work Logs and explicitly selected Tasks for one approved draft version. This performs no Notion writes.',
+    inputSchema: publicationInput,
+    outputSchema: NotionToolOutputShape,
+    annotations: { readOnlyHint: true, openWorldHint: true },
+  }, async (input) => {
+    try {
+      const { publication } = await getNotionServices();
+      return notionSuccess(await publication.preview(input));
+    } catch (error) {
+      return failure(error);
+    }
+  });
+
+  server.registerTool('publish_to_notion', {
+    description: 'Publish an exact, previously previewed approved draft version after explicit user confirmation.',
+    inputSchema: {
+      ...publicationInput,
+      previewFingerprint: z.string().regex(/^[0-9a-f]{64}$/),
+      confirmation: z.string().optional(),
+    },
+    outputSchema: NotionToolOutputShape,
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+  }, async ({ confirmation, ...input }) => {
+    try {
+      const { publication } = await getNotionServices();
+      const preview = await publication.preview(input);
+      if (preview.previewFingerprint !== input.previewFingerprint) {
+        throw new PublicationError('PREVIEW_MISMATCH', 'Publication preview changed; preview and confirm it again');
+      }
+      const phrase = notionPublicationPhrase(input.draftId, input.version, input.previewFingerprint);
+      const supportsFormElicitation = server.server.getClientCapabilities()?.elicitation?.form !== undefined;
+      if (supportsFormElicitation) {
+        let elicitation;
+        try {
+          elicitation = await server.server.elicitInput({
+            mode: 'form',
+            message: `Publish approved draft ${preview.workDate} v${preview.draftVersion} to Notion? This will create ${preview.workLogs.length} Work Log(s) and ${preview.tasks.length} selected Task(s).`,
+            requestedSchema: {
+              type: 'object',
+              properties: {
+                approved: { type: 'boolean', title: 'I explicitly authorize these Notion writes' },
+                confirmation: {
+                  type: 'string',
+                  title: `Type ${phrase}`,
+                  minLength: phrase.length,
+                  maxLength: phrase.length,
+                },
+              },
+              required: ['approved', 'confirmation'],
+            },
+          });
+        } catch {
+          throw new PublicationError('PUBLICATION_NOT_AUTHORIZED', 'The host could not complete publication confirmation');
+        }
+        if (elicitation.action !== 'accept'
+          || elicitation.content?.approved !== true
+          || elicitation.content.confirmation !== phrase) {
+          throw new PublicationError('PUBLICATION_NOT_AUTHORIZED', 'Notion publication was declined, cancelled, or not confirmed exactly');
+        }
+      } else if (confirmation !== phrase) {
+        throw new PublicationError('PUBLICATION_NOT_AUTHORIZED', `This client does not support form elicitation. Type exactly: ${phrase}`);
+      }
+      return notionSuccess(await publication.publish({ ...input, publicationAuthorized: true }));
+    } catch (error) {
+      return failure(error);
+    }
+  });
+
+  server.registerTool('get_notion_publication_status', {
+    description: 'Read local per-item Notion publication and retry status for one draft version.',
+    inputSchema: { draftId: z.string().uuid(), version: z.number().int().positive() },
+    outputSchema: NotionToolOutputShape,
+    annotations: { readOnlyHint: true },
+  }, async ({ draftId, version }) => {
+    try {
+      const { publication } = await getNotionServices();
+      return notionSuccess(await publication.getStatus(draftId, version));
+    } catch (error) {
+      return failure(error);
+    }
+  });
 
   return server;
 }

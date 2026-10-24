@@ -1,6 +1,6 @@
 {
   "name": "local-devlog-mcp",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -14,11 +14,14 @@
     "test": "vitest run",
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
-    "setup": "tsx src/cli/setup.ts"
+    "setup": "tsx src/cli/setup.ts",
+    "notion:validate": "tsx src/cli/validate-notion.ts",
+    "test:notion:integration": "RUN_NOTION_INTEGRATION=1 vitest run tests/notion-integration.test.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/ext-apps": "^1.7.5",
     "@modelcontextprotocol/sdk": "^1.32.1",
+    "@notionhq/client": "^5.28.0",
     "zod": "^3.25.76"
   },
   "devDependencies": {

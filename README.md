@@ -1,6 +1,6 @@
 # Local DevLog MCP
 
-**Status: Milestone 2 complete / external publishing is not implemented.** A macOS-first, open-source MCP that records Git push attempts and stores versioned, human-approved daily drafts.
+**Status: Milestone 3 complete / Apple Calendar is not implemented.** A macOS-first, open-source MCP that records Git push attempts, stores versioned human-approved drafts, and explicitly publishes approved work to Notion.
 
 ## What works
 - Multiple local Git repositories can be registered with `pnpm run setup`.
@@ -11,9 +11,12 @@
 - Draft revisions and approval evidence are stored atomically in local JSON.
 - MCP Apps-capable hosts receive an interactive draft review UI; other hosts receive the same structured JSON plus text fallback.
 - Approval uses native form Elicitation when the host supports it, with an exact confirmation phrase fallback otherwise.
+- Notion Database/Data Source configuration can be validated read-only against API version `2026-03-11`.
+- Approved Work Items can be published to Work Logs and explicitly selected Next Actions to Tasks.
+- Notion publication uses deterministic Local IDs and per-item local state for duplicate prevention and partial-failure retry.
 
 ## Planned MVP (not yet implemented)
-Notion Tasks/Work Logs; Apple Calendar EventKit bridge; idempotent publication. Only approved drafts will be eligible for those future integrations.
+Apple Calendar EventKit bridge and cross-target partial-failure recovery. Only approved drafts will be eligible for Calendar publication.
 
 ## Requirements
 macOS, Node.js >=20, pnpm, Git. Calendar bridge will additionally require Xcode Command Line Tools and calendar permission.
@@ -75,9 +78,54 @@ The interactive view is served as a self-contained `ui://` resource following th
 
 Fallback confirmation is weaker than native Elicitation because an AI client can reproduce a displayed phrase. The persisted `approvalMethod` distinguishes `MCP_ELICITATION` from `EXPLICIT_CONFIRMATION_FALLBACK`; review that audit field before future publication.
 
+## Notion setup and publication
+
+Keep the integration token only in the ignored `.env` file or the process environment:
+
+```dotenv
+NOTION_TOKEN=secret_...
+NOTION_TASKS_DATABASE_ID=<parent-database-id>
+NOTION_TASKS_DATA_SOURCE_ID=<tasks-data-source-id>
+NOTION_WORKLOGS_DATABASE_ID=<parent-database-id>
+NOTION_WORKLOGS_DATA_SOURCE_ID=<work-logs-data-source-id>
+```
+
+For compatibility, an existing `*_DATABASE_ID` value that is actually a Data Source ID is detected read-only and reported as a warning. The application never rewrites `.env` or modifies a Notion schema.
+
+Required Tasks properties:
+
+| Property | Type | Required option |
+| --- | --- | --- |
+| Name | title | — |
+| Due Date | date | — |
+| Local Id | rich_text | — |
+| Status | select | TODO |
+| Priority | select | MEDIUM |
+
+Required Work Logs properties:
+
+| Property | Type |
+| --- | --- |
+| Name | title |
+| Date | date |
+| Repository | url |
+| Summary | rich_text |
+| Local ID | rich_text |
+
+Run the read-only check with `pnpm notion:validate`. It authenticates, resolves Database and Data Source IDs, and compares property names, types, and required select options. It never creates or updates a page.
+
+Publication is deliberately two-phase:
+
+1. Call `preview_notion_publication` with an approved `draftId`, exact approved `version`, and zero-based `selectedNextActionIndexes`.
+2. Review the Work Logs, selected Tasks, and `previewFingerprint` returned by the preview.
+3. Call `publish_to_notion` with the same selection and fingerprint. Native Elicitation or the exact returned fallback phrase is required before any write.
+4. Call `get_notion_publication_status` to inspect each item and retry failures safely.
+
+Approval alone never publishes. Every Work Item becomes one Work Log, while only explicitly selected Next Actions become Tasks. Work Log details are written in the page body. The local status is stored in `notion-publications.json`; if a remote create succeeds before local persistence, retry queries the Local ID before creating anything else.
+
 ## Repository setup
 
-Configuration, events, and drafts are stored outside this checkout at `~/Library/Application Support/local-devlog-mcp/`. No token or diff content is stored there.
+Configuration, events, drafts, and publication state are stored outside this checkout at `~/Library/Application Support/local-devlog-mcp/`. The Notion token remains in `.env` or the process environment and is never copied into local JSON. No diff content is stored.
 
 ```bash
 # Build first because installed hooks call dist/git/hook-runner.js.

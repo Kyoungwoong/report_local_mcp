@@ -20,4 +20,5 @@ If calendar permissions delay delivery, release Notion-first beta and label Cale
 - Milestone 0: TypeScript build and stdio MCP connectivity complete.
 - Milestone 1: repository registration, fail-open pre-push collection, remote verification, and daily activity complete.
 - Milestone 2: versioned daily drafts, MCP Apps review UI, Elicitation-first approval, and fallback audit trail complete.
-- Notion, Calendar, and publication recovery remain unimplemented.
+- Milestone 3: Notion authentication/schema validation, Tasks and Work Logs publication, Local ID deduplication, and per-item retry complete.
+- Apple Calendar and cross-target publication recovery remain unimplemented.
